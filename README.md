@@ -1,4 +1,4 @@
-# Cookie_Clicker_3DS
+# Cookie Clicker 3DS
 A short Cookie Clicker like app based on Kaisogen's CookieCollector built using devkitPro and made in C.
 
 ##Instalation

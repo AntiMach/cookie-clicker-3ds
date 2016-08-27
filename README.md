@@ -2,7 +2,7 @@
 A short Cookie Clicker like app based on Kaisogen's CookieCollector built using devkitPro and made in C.
 
 ##Instalation
-Download the latest compiled version here:
+Download the latest compiled version here: https://github.com/TheMachinumps/Cookie_Clicker_3DS/releases
 
 Then, make sure drag the Cookie Clicker folder in your 3ds folder.
 

@@ -1,358 +1,292 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <3ds.h>
+#include <math.h>
+#include <sys\stat.h>
+#include <time.h>
 
-#define clear() printf("\033[2J")
-#define gotopos(x,y) printf("\033[%d;%dH", (y), (x))
-#define textattr(attr) printf("\x1b[%dm", (attr))
+u64 cookies = 0;
+int opt = 1;
+int scr = 1;
+const char* buildingNames[9] = {"Clicker", "Grandma", "Farm", "Mine", "???", "Bank", "Temple", "Wizard", "Ship"};
+const u64  buildingPrices[9] = {150, 500, 2200, 18000, 130000, 1400000, 20000000, 330000000, 5100000000};
+const u64 cookieMultiplier[9] = {1, 5, 16, 75, 260, 1400, 7800, 44000, 260000};
+u64 buildingData[9] = {};
+u32 buildings = 9;
+u64 clickerMultiplier = 0;
+u64 totalCps = 0;
+u8 autoSaved = 0;
 
-float rawxpos, rawypos, touchx, touchy;
-int xpos, ypos;
 
-int RESET = 0;
-int FG_BLACK = 30;
-int BG_BLACK = 40;
-int FG_RED = 31;
-int BG_RED = 41;
-int FG_GREEN = 32;
-int BG_GREEN = 42;
-int FG_YELLOW = 33;
-int BG_YELLOW = 43;
-int FG_BLUE = 34;
-int BG_BLUE = 44;
-int FG_MAGENTA = 35;
-int BG_MAGENTA = 45;
-int FG_CYAN = 36;
-int BG_CYAN = 46;
-int FG_WHITE = 37;
-int BG_WHITE = 47;
+u64 frames = 0;
 
-int cookies = 0;
-int upperclick = 100;
-int uppersecond = 200;
-int addcookies = 1;
-int cookiespersec = 0;
-int selector = 1;
-int shopselector = 0;
-int shop = 0;
-int frames = 0;
+void selectOption(int *cursor, int keyS, int keyA, int min, int max){
+	u32 altKeyDown = hidKeysDown();
+	if(altKeyDown & keyS){
+		*cursor -= 1;
+	}
+	if(altKeyDown & keyA){
+		*cursor += 1;
+	}
+	
+	if(*cursor > max){
+		*cursor = min;
+	}
+	if(*cursor < min){
+		*cursor = max;
+	}
+	return;
+}
 
-int main()
-{	
+void printOption(int cursor, int option, char text[],int notSelected, int selected, int x, int y){
+	if(cursor == option){
+		printf("\e[%d;%dH\e[%d;1m%s\e[K\e[0m", y, x, selected, text);
+	} else {
+		printf("\e[%d;%dH\e[%d;1m%s\e[K\e[0m", y, x, notSelected, text);
+	}
+	return;
+}
+
+void changeScreen(int *scr, int toChange, int *cursor, PrintConsole top, PrintConsole bottom){
+	consoleSelect(&top);
+	consoleClear();
+	consoleSelect(&bottom);
+	consoleClear();
+	*scr = toChange;
+	*cursor = 1;
+	return;
+}
+
+void resetData(){
+	memset(buildingData, 0, sizeof(buildingData));
+	cookies = 0;
+	totalCps = 0;
+	clickerMultiplier = 0;
+	return;
+}
+
+void cookiesPerSecond(){
+	totalCps = 0;
+	for (int i = 0; i < buildings; i++)
+		totalCps += buildingData[i] * cookieMultiplier[i];
+}
+
+void buyBuilding(int cursor, int buildingNum, int notSelected, int affordable, int notAffordable, int x, int y){
+	if(cursor == buildingNum + 1){
+		if(cookies >= (u64)(buildingPrices[buildingNum] * pow(1.2, buildingData[buildingNum]))){
+			printf("\e[%d;%dH\e[%d;1mBuy %s\e[K\e[0m", y, x, affordable, buildingNames[buildingNum]);
+			
+			u32 altKeyDown = hidKeysDown(); 
+			if (altKeyDown & KEY_A) {
+				cookies -= (u64)(buildingPrices[buildingNum] * pow(1.2, buildingData[buildingNum]));
+				buildingData[buildingNum]++;
+			}
+		}
+		else
+			printf("\e[%d;%dH\e[%d;1mBuy %s\e[K\e[0m", y, x, notAffordable, buildingNames[buildingNum]);
+	} else {
+		printf("\e[%d;%dH\e[%d;1mBuy %s\e[K\e[0m", y, x, notSelected, buildingNames[buildingNum]);
+	}
+	return;
+}
+
+u64 buildingPrice(int buildingNum){
+	return (u64)(buildingPrices[buildingNum] * pow(1.2, buildingData[buildingNum]));
+}
+
+void saveData(char* filepath){
+	FILE *file = fopen(filepath, "r+");
+	
+	if (!file)
+		file = fopen(filepath, "w+");
+	
+	time_t curTime;
+	
+	time(&curTime);
+	
+	fwrite(&cookies, sizeof(u64), 1, file);
+	fwrite(buildingData, sizeof(u64), buildings, file);
+	fwrite(&clickerMultiplier, sizeof(u64), 1, file);
+	fwrite(&curTime, sizeof(time_t), 1, file);
+	fclose(file);
+}
+
+void loadData(char* filepath){
+	FILE *file = fopen(filepath, "r+");
+	
+	if (!file)
+		file = fopen(filepath, "w+");
+	
+	time_t lastTime;
+	time_t curTime;
+	
+	time(&curTime);
+	
+	fread(&cookies, sizeof(u64), 1, file);
+	fread(buildingData, sizeof(u64), buildings, file);
+	fread(&clickerMultiplier, sizeof(u64), 1, file);
+	fread(&lastTime, sizeof(u64), 1, file);
+	fclose(file);
+	
+	if(lastTime != 0){
+		cookiesPerSecond();
+		cookies += totalCps * (curTime - lastTime);
+	}
+}
+
+int main(int argc, char **argv) {
 	gfxInitDefault();
-	//gfxSet3D(true); // uncomment if using stereoscopic 3D
 	
 	PrintConsole topScreen;
 	PrintConsole bottomScreen;
 	
-	consoleInit(GFX_BOTTOM, &bottomScreen);
 	consoleInit(GFX_TOP, &topScreen);
+	consoleInit(GFX_BOTTOM, &bottomScreen);
 	
-	// Options menu
-	consoleInit(GFX_BOTTOM, NULL); // Selecting the bottom screen
-	textattr(FG_CYAN);
-	printf(
-		"Instructions:\n"
-		"\n"
-		"Use the left and rigth keys on the D-Padto move the cursor above around!\n"
-		"\n"
-		"Press A to select an option\n"
-		"\n"
-		"And have fun!"
+	mkdir("/3ds/", 0777);
+	mkdir("/3ds/data", 0777);
+	mkdir("/3ds/data/CookieClicker3DS", 0777);
 	
-	);
-	gotopos(10,9);
-	printf("     €€€€€€€€€€");
-	gotopos(10,10);
-	printf("     €€€€€€€€€€");
-	gotopos(10,11);
-	printf("   €€    €     €€");
-	gotopos(10,12);
-	printf("   €€    €     €€");
-	gotopos(10,13);
-	printf(" €€      €€      €€");
-	gotopos(10,14);
-	printf(" €€      €€      €€");
-	gotopos(10,15);
-	printf(" €   €     €      €");
-	gotopos(10,16);
-	printf(" €   €     €      €");
-	gotopos(10,17);
-	printf("€€   €€   €€€     €€");
-	gotopos(10,18);
-	printf("€€   €€   €€€     €€");
-	gotopos(10,19);
-	printf("€€   €         €€ €€");
-	gotopos(10,20);
-	printf("€€   €         €€ €€");
-	gotopos(10,21);
-	printf(" €       €€€    €€€");
-	gotopos(10,22);
-	printf(" €       €€€    €€€");
-	gotopos(10,23);
-	printf(" €€     €€€      €€");
-	gotopos(10,24);
-	printf(" €€     €€€      €€");
-	gotopos(10,25);
-	printf("   €€          €€");
-	gotopos(10,26);
-	printf("   €€          €€");
-	gotopos(10,27);
-	printf("     €€€€€€€€€€");
-	gotopos(10,28);
-	printf("     €€€€€€€€€€");
+	loadData("/3ds/data/CookieClicker3DS/userData.bin");
 
-	textattr(RESET);
-	consoleInit(GFX_TOP, NULL); // Selecting the top screen
-	
 	// Main loop
-	while (aptMainLoop())
-	{
-		frames++;
+	while (aptMainLoop()) {
 
 		gspWaitForVBlank();
 		hidScanInput();
-
 		u32 kDown = hidKeysDown();
+	
+		// Top screen
+		consoleSelect(&topScreen);
 		
-		touchPosition touch;
+		printf("\e[1;1HCookies: %llu\e[K", cookies);
 		
-		hidTouchRead(&touch);
-		touchx = touch.px;
-		touchy = touch.py;
+		cookiesPerSecond();
 		
-		rawxpos = ((touchx) / 320) * 40;
-		rawypos = ((touchy) / 240) * 30;
-		xpos = (int)rawxpos;
-		ypos = (int)rawypos;
-		
-		// Ouf of shop display
-		if(shop == 0){
-			shopselector = 0;
-			textattr(FG_YELLOW);
-			gotopos(9,0);
-			printf("0                                       ");
-			gotopos(0,2);
-			printf("                                                 ");
-			gotopos(0,4);
-			printf("                                                 ");
-			gotopos(0,6);
-			printf("                                                 ");
-			gotopos(0,8);
-			printf("                                                 ");
-			gotopos(0,0);
-			printf("Cookies: %i", cookies);
-			textattr(RESET);
+		if (scr == 1) {
+			printf("\e[3;1HMain Menu\e[K");
+			for (int i = 0; i < buildings; i++){
+				printf("\e[%d;1H%ss: %llu\e[K", 5 + i, buildingNames[i], buildingData[i]);
+			}
+			printf("\e[%lu;1HCookies Per Click: %llu", 7 + buildings, (u64)pow(2, clickerMultiplier));
+			printf("\e[%lu;1HCookies Per Second: %llu", 8 + buildings, totalCps);
+		} else if (scr == 2) {
+			printf("\e[3;1HShop\e[K");
+			for (int i = 0; i < buildings; i++){
+				printf("\e[%d;1H%s price: %llu \e[%d;30HAmount: %llu\e[K", 5 + i, buildingNames[i], buildingPrice(i), 5 + i, buildingData[i]);
+			}
+			printf("\e[%lu;1HClicker upgrade price: %llu\e[K", 7 + buildings, (u64)(500 * pow(3, clickerMultiplier)));
+		} else if (scr == 3) {
+			printf("\e[3;1HOptions\e[K");
+		} else if (scr == 4) {
+			printf("\e[3;1HAre you sure you want to reset?\e[K");
 		}
 		
-		// Inside shop display
-		if(shop == 1){
-			textattr(FG_CYAN);
-			gotopos(29,0);
-			printf("0                   ");
-			gotopos(1,0);
-			printf(" Upgrade cookies per click: %i", upperclick);
-			textattr(FG_GREEN);
-			gotopos(30,2);
-			printf("0                  ");
-			gotopos(1,2);
-			printf(" Upgrade cookies per second: %i", uppersecond);
-			textattr(FG_YELLOW);
-			gotopos(27,4);
-			printf("0                     ");
-			gotopos(0,4);
-			printf("Current cookies per click: %i", addcookies);
-			gotopos(28,6);
-			printf("0                    ");
-			gotopos(0,6);
-			printf("Current cookies per second: %i", cookiespersec);
-			gotopos(9,8);
-			printf("0                                       ");
-			gotopos(0,8);
-			printf("Cookies: %i", cookies);
-			textattr(RESET);
+		// Bottom screen & statements
+		consoleSelect(&bottomScreen);
+		
+		if (scr == 1) {
+			selectOption(&opt, KEY_UP, KEY_DOWN, 1, 4);
+		
+			printOption(opt, 1, "Cookies!", 37, 32, 1, 1);
+			printOption(opt, 2, "Shop", 37, 32, 1, 2);
+			printOption(opt, 3, "Options", 37, 32, 1, 3);
+			printOption(opt, 4, "Exit", 37, 31, 1, 4);
+			if (autoSaved > 0)
+				printf("\e[6;1HAutosaved!");
+			else
+				printf("\e[6;1H\e[K");
 			
-		}
-		
-		// Add cookies per second
-		if(frames % 60 == 0)
-			cookies += cookiespersec;
-		
-		// Out of shop selections
-		if(kDown & KEY_A & (selector == 0) & (shop == 0))
-			shop = 2;
-		if(kDown & KEY_TOUCH)
-			if((xpos >= 10) & (xpos <= 30) & (ypos >= 9) & (ypos <= 28) & (shop == 0))
-				cookies += addcookies;
-		if(kDown & KEY_A & (selector == 2) & (shop == 0))
-			break; // Break to return to HBL
-		// Inside shop selections
-		if(kDown & KEY_A & (selector == 0) & (shop == 1))
-			shop = 0;
-		if(kDown & KEY_A & (selector == 1) & (shop == 1)){
-			if((shopselector == 0) & (cookies >= upperclick)){
-				cookies -= upperclick;
-				addcookies *= 2;
-				upperclick += (upperclick / 2);
+			if(kDown & KEY_A & (opt == 1)){
+				cookies += (u64)pow(2, clickerMultiplier);
 			}
-			if((shopselector == 1) & (cookies >= uppersecond)){
-				cookies -= uppersecond;
-				cookiespersec += 1;
-				cookiespersec *= 2;
-				uppersecond += (uppersecond / 2);
+			if(kDown & KEY_A & (opt == 2)){
+				changeScreen(&scr, 2, &opt, topScreen, bottomScreen);
+			}
+			if(kDown & KEY_A & (opt == 3)){
+				changeScreen(&scr, 3, &opt, topScreen, bottomScreen);
+			}
+			if(kDown & KEY_A & (opt == 4)){
+				break;
+			}
+		} else if (scr == 2) {
+			selectOption(&opt, KEY_UP, KEY_DOWN, 1, 2 + buildings);
+			
+			for (int i = 0; i < buildings; i++){
+				buyBuilding(opt, i, 37, 32, 31, 1, 1 + i);
+			}
+			if (cookies >= (u64)(500 * pow(3, clickerMultiplier)))
+				printOption(opt, 1 + buildings, "Upgrade clicker", 37, 32, 1, 2 + buildings);
+			else
+				printOption(opt, 1 + buildings, "Upgrade clicker", 37, 31, 1, 2 + buildings);
+			printOption(opt, 2 + buildings, "Return", 37, 32, 1, 4 + buildings);
+			
+			if (autoSaved > 0)
+				printf("\e[%lu;1HAutosaved!", 6 + buildings);
+			else
+				printf("\e[%lu;1H\e[K", 6 + buildings);
+			
+			if(kDown & KEY_A & (opt == 1 + buildings)){
+				if(cookies >= (u64)(500 * pow(3, clickerMultiplier))){
+					cookies -= (u64)(500 * pow(3, clickerMultiplier));
+					clickerMultiplier++;
+				}
+					
+			}
+			if(kDown & KEY_A & (opt == 2 + buildings)){
+				changeScreen(&scr, 1, &opt, topScreen, bottomScreen);
+			}
+		} else if (scr == 3) {
+			selectOption(&opt, KEY_UP, KEY_DOWN, 1, 3);
+			
+			printOption(opt, 1, "Save game", 37, 34, 1, 1);
+			printOption(opt, 2, "Reset game", 37, 31, 1, 2);
+			printOption(opt, 3, "Return", 37, 32, 1, 3);
+			
+			if (autoSaved > 0)
+				printf("\e[5;1HAutosaved!");
+			else
+				printf("\e[5;1H\e[K");
+			
+			if(kDown & KEY_A & (opt == 1)){
+				saveData("/3ds/data/CookieClicker3DS/userData.bin");
+			}
+			if(kDown & KEY_A & (opt == 2)){
+				changeScreen(&scr, 4, &opt, topScreen, bottomScreen);
+			}
+			if(kDown & KEY_A & (opt == 3)){
+				changeScreen(&scr, 1, &opt, topScreen, bottomScreen);
+			}
+		} else if (scr == 4) {
+			selectOption(&opt, KEY_UP, KEY_DOWN, 1, 2);
+			
+			printOption(opt, 1, "Yes", 37, 31, 1, 1);
+			printOption(opt, 2, "No", 37, 32, 1, 2);
+			if(kDown & KEY_A & (opt == 1)){
+				resetData();
+				changeScreen(&scr, 1, &opt, topScreen, bottomScreen);
+			}
+			if(kDown & KEY_A & (opt == 2)){
+				changeScreen(&scr, 3, &opt, topScreen, bottomScreen);
 			}
 		}
-		if((selector == 2) & (shop == 1)){
-			if(kDown & KEY_DUP)
-				shopselector--;
-			if(kDown & KEY_DDOWN)
-				shopselector++;
-		}
 		
-		if(shopselector > 1)
-			shopselector = 1;
-		if(shopselector < 0)
-			shopselector = 0;
-		
-		if(shop == 1){
-			if(shopselector == 0){
-				gotopos(0,0);
-				printf(">");
-				gotopos(0,2);
-				printf(" ");
+		if (scr != 4){
+			frames++;
+			
+			if (frames % 60 == 0){
+				cookies += totalCps; // Add n cookies per building every second
 			}
-			if(shopselector == 1){
-				gotopos(0,0);
-				printf(" ");
-				gotopos(0,2);
-				printf(">");
+			
+			if (frames % 1200 == 0){
+				saveData("/3ds/data/CookieClicker3DS/userData.bin"); // Add n cookies per building every second
+				autoSaved = 180;
+			}
+			if (autoSaved > 0){
+				autoSaved--;
 			}
 		}
-		
-		// Prevent player from instantly returning from shop
-		if(shop == 2)
-			shop = 1;
-		
-		// Update selector position
-		if(kDown & KEY_DLEFT)
-			selector--;
-		if(kDown & KEY_DRIGHT)
-			selector++;
-		if(selector > 2)
-			selector = 0;
-		if(selector < 0)
-			selector = 2;
-		
-		// Selector
-		if(selector == 0){
-			gotopos(8,23);
-			printf("\\/");
-			gotopos(24,23);
-			printf("  ");
-			gotopos(40,23);
-			printf("  ");
-		}
-		if(selector == 1){
-			gotopos(8,23);
-			printf("  ");
-			gotopos(24,23);
-			printf("\\/");
-			gotopos(40,23);
-			printf("  ");
-		}
-		if(selector == 2){
-			gotopos(8,23);
-			printf("  ");
-			gotopos(24,23);
-			printf("  ");
-			gotopos(40,23);
-			printf("\\/");
-		}
-		
-		// Buttons (out of shop)
-		if(shop == 0){
-			gotopos(2,24);
-			printf("…ÕÕÕÕÕÕÕÕÕÕÕÕª");
-			gotopos(2,25);
-			printf("∫            ∫");
-			gotopos(2,26);
-			printf("∫    Shop    ∫");
-			gotopos(2,27);
-			printf("∫            ∫");
-			gotopos(2,28);
-			printf("»ÕÕÕÕÕÕÕÕÕÕÕÕº");
-			gotopos(18,24);
-			printf("…ÕÕÕÕÕÕÕÕÕÕÕÕª");
-			gotopos(18,25);
-			printf("∫            ∫");
-			gotopos(18,26);
-			printf("∫  Cookies!  ∫");
-			gotopos(18,27);
-			printf("∫            ∫");
-			gotopos(18,28);
-			printf("»ÕÕÕÕÕÕÕÕÕÕÕÕº");
-			gotopos(34,24);
-			printf("…ÕÕÕÕÕÕÕÕÕÕÕÕª");
-			gotopos(34,25);
-			printf("∫            ∫");
-			gotopos(34,26);
-			printf("∫    Exit    ∫");
-			gotopos(34,27);
-			printf("∫            ∫");
-			gotopos(34,28);
-			printf("»ÕÕÕÕÕÕÕÕÕÕÕÕº");
-		}
-		
-		// Buttons (in shop)
-		if(shop == 1){
-			gotopos(2,24);
-			printf("…ÕÕÕÕÕÕÕÕÕÕÕÕª");
-			gotopos(2,25);
-			printf("∫            ∫");
-			gotopos(2,26);
-			printf("∫   Return   ∫");
-			gotopos(2,27);
-			printf("∫            ∫");
-			gotopos(2,28);
-			printf("»ÕÕÕÕÕÕÕÕÕÕÕÕº");
-			if(shopselector == 0){
-				if(cookies < upperclick)
-					textattr(FG_RED);
-			}
-			if(shopselector == 1){
-				if(cookies < uppersecond)
-					textattr(FG_RED);
-			}
-			gotopos(18,24);
-			printf("…ÕÕÕÕÕÕÕÕÕÕÕÕª");
-			gotopos(18,25);
-			printf("∫            ∫");
-			gotopos(18,26);
-			printf("∫  Upgrade!  ∫");
-			gotopos(18,27);
-			printf("∫            ∫");
-			gotopos(18,28);
-			printf("»ÕÕÕÕÕÕÕÕÕÕÕÕº");
-			textattr(RESET);
-			gotopos(34,24);
-			printf("…ÕÕÕÕÕÕÕÕÕÕÕÕª");
-			gotopos(34,25);
-			printf("∫            ∫");
-			gotopos(34,26);
-			printf("∫   Select   ∫");
-			gotopos(34,27);
-			printf("∫            ∫");
-			gotopos(34,28);
-			printf("»ÕÕÕÕÕÕÕÕÕÕÕÕº");
-		}
-		
-		
-		
-		if (kDown & KEY_START)
-			break; // break in order to return to hbmenu
-		
-		
+
 		// Flush and swap framebuffers
 		gfxFlushBuffers();
 		gfxSwapBuffers();
@@ -360,13 +294,4 @@ int main()
 
 	gfxExit();
 	return 0;
-}
-
-int string_length(char s[]) {
-   int c = 0;
- 
-   while (s[c] != '\0')
-      c++;
- 
-   return c;
 }
